@@ -1,3 +1,3 @@
-module github.com/dustin/go-broadcast
+module github.com/davedecoder/go-broadcast
 
 go 1.16

@@ -3,7 +3,6 @@ Package broadcast provides pubsub of messages over channels.
 
 A provider has a Broadcaster into which it Submits messages and into
 which subscribers Register to pick up those messages.
-
 */
 package broadcast
 
@@ -28,6 +27,8 @@ type Broadcaster interface {
 	Submit(interface{})
 	// Try Submit a new object to all subscribers return false if input chan is fill
 	TrySubmit(interface{}) bool
+	// Flush a channel
+	Flush(<-chan interface{})
 }
 
 func (b *broadcaster) broadcast(m interface{}) {
@@ -100,5 +101,18 @@ func (b *broadcaster) TrySubmit(m interface{}) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (b *broadcaster) Flush(ch <-chan interface{}) {
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
 	}
 }
