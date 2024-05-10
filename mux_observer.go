@@ -144,6 +144,6 @@ func (s *subObserver) TrySubmit(ob interface{}) bool {
 	}
 }
 
-func (s *subObserver) Flush(ch <-chan interface{}) {
+func (s *subObserver) Unsubscribe(ch chan interface{}) {
 
 }

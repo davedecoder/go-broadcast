@@ -27,8 +27,8 @@ type Broadcaster interface {
 	Submit(interface{})
 	// Try Submit a new object to all subscribers return false if input chan is fill
 	TrySubmit(interface{}) bool
-	// Flush a channel
-	Flush(<-chan interface{})
+	// Flush and Unregisters a channel
+	Unsubscribe(chan interface{})
 }
 
 func (b *broadcaster) broadcast(m interface{}) {
@@ -104,7 +104,8 @@ func (b *broadcaster) TrySubmit(m interface{}) bool {
 	}
 }
 
-func (b *broadcaster) Flush(ch <-chan interface{}) {
+func (b *broadcaster) Unsubscribe(ch chan interface{}) {
+	b.Unregister(ch)
 	for {
 		select {
 		case _, ok := <-ch:
