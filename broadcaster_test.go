@@ -1,120 +1,99 @@
 package broadcast
 
 import (
-	"sync"
 	"testing"
 )
 
-func TestBroadcast(t *testing.T) {
-	wg := sync.WaitGroup{}
-
-	b := NewBroadcaster(100)
-	defer b.Close()
-
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-
-		cch := make(chan interface{})
-
-		b.Register(cch)
-
-		go func() {
-			defer wg.Done()
-			defer b.Unregister(cch)
-			<-cch
-		}()
-
+func TestHUB_broadcast(t *testing.T) {
+	// Create a new HUB instance
+	hub := &HUB{
+		input:       make(chan interface{}),
+		reg:         make(chan *Subscriber),
+		unreg:       make(chan *Subscriber),
+		subscribers: make(map[*Subscriber]struct{}),
 	}
 
-	b.Submit(1)
-
-	wg.Wait()
-}
-
-func TestBroadcastTrySubmit(t *testing.T) {
-	b := NewBroadcaster(1)
-	defer b.Close()
-
-	if ok := b.TrySubmit(0); !ok {
-		t.Fatalf("1st TrySubmit assert error expect=true actual=%v", ok)
+	// Create some test subscribers
+	sub1 := &Subscriber{
+		MsgChan:   make(chan interface{}, 1),
+		closeChan: make(chan struct{}),
+	}
+	sub2 := &Subscriber{
+		MsgChan:   make(chan interface{}, 1),
+		closeChan: make(chan struct{}),
 	}
 
-	if ok := b.TrySubmit(1); ok {
-		t.Fatalf("2nd TrySubmit assert error expect=false actual=%v", ok)
-	}
+	// Add the test subscribers to the HUB
+	hub.subscribers[sub1] = struct{}{}
+	hub.subscribers[sub2] = struct{}{}
 
-	cch := make(chan interface{})
-	b.Register(cch)
+	// Test case 1: Broadcast a message to all subscribers
+	testMsg := "Hello, World!"
+	hub.broadcast(testMsg)
 
-	if ok := b.TrySubmit(1); !ok {
-		t.Fatalf("3rd TrySubmit assert error expect=true actual=%v", ok)
-	}
-}
-
-func TestBroadcastCleanup(t *testing.T) {
-	b := NewBroadcaster(100)
-	b.Register(make(chan interface{}))
-	b.Close()
-}
-
-func echoer(chin, chout chan interface{}) {
-	for m := range chin {
-		chout <- m
-	}
-}
-
-func BenchmarkDirectSend(b *testing.B) {
-	chout := make(chan interface{})
-	chin := make(chan interface{})
-	defer close(chin)
-
-	go echoer(chin, chout)
-
-	for i := 0; i < b.N; i++ {
-		chin <- nil
-		<-chout
-	}
-}
-
-func BenchmarkBrodcast(b *testing.B) {
-	chout := make(chan interface{})
-
-	bc := NewBroadcaster(0)
-	defer bc.Close()
-	bc.Register(chout)
-
-	for i := 0; i < b.N; i++ {
-		bc.Submit(nil)
-		<-chout
-	}
-}
-
-func BenchmarkParallelDirectSend(b *testing.B) {
-	chout := make(chan interface{})
-	chin := make(chan interface{})
-	defer close(chin)
-
-	go echoer(chin, chout)
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			chin <- nil
-			<-chout
+	// Check if the message was received by both subscribers
+	select {
+	case msg := <-sub1.MsgChan:
+		if msg != testMsg {
+			t.Errorf("Subscriber 1 received incorrect message: %v", msg)
 		}
-	})
+	case <-sub1.closeChan:
+		t.Errorf("Subscriber 1 closed unexpectedly")
+	default:
+		t.Errorf("Subscriber 1 did not receive the message")
+	}
+
+	select {
+	case msg := <-sub2.MsgChan:
+		if msg != testMsg {
+			t.Errorf("Subscriber 2 received incorrect message: %v", msg)
+		}
+	case <-sub2.closeChan:
+		t.Errorf("Subscriber 2 closed unexpectedly")
+	default:
+		t.Errorf("Subscriber 2 did not receive the message")
+	}
+
+	// Test case 2: Broadcast a message to a closed subscriber
+	closedSub := &Subscriber{
+		MsgChan:   make(chan interface{}),
+		closeChan: make(chan struct{}),
+	}
+	close(closedSub.closeChan)
+	hub.subscribers[closedSub] = struct{}{}
+
+	hub.broadcast("Test message")
+
+	// Check if the message was not sent to the closed subscriber
+	select {
+	case <-closedSub.MsgChan:
+		t.Errorf("Message was sent to a closed subscriber")
+	default:
+		// Expected behavior
+	}
 }
 
-func BenchmarkParallelBrodcast(b *testing.B) {
-	chout := make(chan interface{})
+func TestSubscriber_Receive(t *testing.T) {
+	// Create a new Subscriber instance
+	sub := &Subscriber{
+		MsgChan:   make(chan interface{}, 1),
+		closeChan: make(chan struct{}),
+	}
 
-	bc := NewBroadcaster(0)
-	defer bc.Close()
-	bc.Register(chout)
+	// Test case 1: Receive a message from the channel
+	testMsg := "Hello, World!"
+	sub.MsgChan <- testMsg
 
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			bc.Submit(nil)
-			<-chout
-		}
-	})
+	msg := sub.Receive()
+	if msg != testMsg {
+		t.Errorf("Received incorrect message: %v", msg)
+	}
+
+	// Test case 2: Receive from a closed channel
+	close(sub.MsgChan)
+
+	msg, ok := <-sub.MsgChan
+	if ok {
+		t.Errorf("Received unexpected message from closed channel: %v", msg)
+	}
 }

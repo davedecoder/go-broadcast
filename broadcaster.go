@@ -6,114 +6,84 @@ which subscribers Register to pick up those messages.
 */
 package broadcast
 
-type broadcaster struct {
-	input chan interface{}
-	reg   chan chan<- interface{}
-	unreg chan chan<- interface{}
-
-	outputs map[chan<- interface{}]bool
+type Subscriber struct {
+	MsgChan   chan interface{}
+	closeChan chan struct{}
 }
 
-// The Broadcaster interface describes the main entry points to
-// broadcasters.
-type Broadcaster interface {
-	// Register a new channel to receive broadcasts
-	Register(chan<- interface{})
-	// Unregister a channel so that it no longer receives broadcasts.
-	Unregister(chan<- interface{})
-	// Shut this broadcaster down.
-	Close() error
-	// Submit a new object to all subscribers
-	Submit(interface{})
-	// Try Submit a new object to all subscribers return false if input chan is fill
-	TrySubmit(interface{}) bool
-	// Flush and Unregisters a channel
-	Unsubscribe(chan interface{})
-}
-
-func (b *broadcaster) broadcast(m interface{}) {
-	for ch := range b.outputs {
-		ch <- m
+func NewSubscriber() *Subscriber {
+	return &Subscriber{
+		MsgChan:   make(chan interface{}),
+		closeChan: make(chan struct{}),
 	}
 }
 
-func (b *broadcaster) run() {
-	for {
+func (s *Subscriber) Receive() interface{} {
+	return <-s.MsgChan
+}
+
+type HUB struct {
+	input chan interface{}
+	reg   chan *Subscriber
+	unreg chan *Subscriber
+
+	subscribers map[*Subscriber]struct{}
+}
+
+func NewHUB(bufflen int) *HUB {
+	h := &HUB{
+		input:       make(chan interface{}, bufflen),
+		reg:         make(chan *Subscriber),
+		unreg:       make(chan *Subscriber),
+		subscribers: make(map[*Subscriber]struct{}),
+	}
+
+	go h.run()
+
+	return h
+}
+
+func (h *HUB) Subscribe(subscriber *Subscriber) {
+	h.reg <- subscriber
+}
+
+func (h *HUB) Unsubscribe(subscriber *Subscriber) {
+	close(subscriber.closeChan)
+	h.unreg <- subscriber
+}
+
+func (h *HUB) Publish(msg interface{}) {
+	h.input <- msg
+}
+
+func (h *HUB) Close() {
+	close(h.reg)
+	close(h.unreg)
+	close(h.input)
+}
+
+func (h *HUB) broadcast(msg interface{}) {
+	for s := range h.subscribers {
 		select {
-		case m := <-b.input:
-			b.broadcast(m)
-		case ch, ok := <-b.reg:
-			if ok {
-				b.outputs[ch] = true
-			} else {
-				return
-			}
-		case ch := <-b.unreg:
-			delete(b.outputs, ch)
+		case s.MsgChan <- msg:
+		case <-s.closeChan:
 		}
 	}
 }
 
-// NewBroadcaster creates a new broadcaster with the given input
-// channel buffer length.
-func NewBroadcaster(buflen int) Broadcaster {
-	b := &broadcaster{
-		input:   make(chan interface{}, buflen),
-		reg:     make(chan chan<- interface{}),
-		unreg:   make(chan chan<- interface{}),
-		outputs: make(map[chan<- interface{}]bool),
-	}
-
-	go b.run()
-
-	return b
-}
-
-func (b *broadcaster) Register(newch chan<- interface{}) {
-	b.reg <- newch
-}
-
-func (b *broadcaster) Unregister(newch chan<- interface{}) {
-	b.unreg <- newch
-}
-
-func (b *broadcaster) Close() error {
-	close(b.reg)
-	close(b.unreg)
-	return nil
-}
-
-// Submit an item to be broadcast to all listeners.
-func (b *broadcaster) Submit(m interface{}) {
-	if b != nil {
-		b.input <- m
-	}
-}
-
-// TrySubmit attempts to submit an item to be broadcast, returning
-// true iff it the item was broadcast, else false.
-func (b *broadcaster) TrySubmit(m interface{}) bool {
-	if b == nil {
-		return false
-	}
-	select {
-	case b.input <- m:
-		return true
-	default:
-		return false
-	}
-}
-
-func (b *broadcaster) Unsubscribe(ch chan interface{}) {
-	b.Unregister(ch)
+func (h *HUB) run() {
 	for {
 		select {
-		case _, ok := <-ch:
-			if !ok {
+		case ch, ok := <-h.reg:
+			if ok {
+				h.subscribers[ch] = struct{}{}
+			} else {
 				return
 			}
-		default:
-			return
+		case ch := <-h.unreg:
+			delete(h.subscribers, ch)
+		case msg := <-h.input:
+			h.broadcast(msg)
 		}
 	}
 }
