@@ -2,7 +2,86 @@ package broadcast
 
 import (
 	"testing"
+	"time"
 )
+
+func TestNewHUB(t *testing.T) {
+	bufflen := 10
+	h := NewHUB(bufflen)
+	if h == nil {
+		t.Error("NewHUB returned nil")
+	}
+	if len(h.input) != 0 || cap(h.input) != bufflen {
+		t.Errorf("HUB input channel buffer length expected to be %d, got %d", bufflen, cap(h.input))
+	}
+}
+
+func TestSubscribeAndUnsubscribe(t *testing.T) {
+	h := NewHUB(10)
+	defer h.Close()
+	subscriber := NewSubscriber()
+	h.Subscribe(subscriber)
+	if _, ok := h.subscribers[subscriber]; !ok {
+		t.Error("Subscriber was not added")
+	}
+
+	h.Unsubscribe(subscriber)
+
+	select {
+	case <-subscriber.closeChan:
+		time.Sleep(time.Second * 1)
+		// Broadcast goroutine finished successfully
+	case <-time.After(time.Second * 1):
+		t.Error("Timed out waiting for broadcast goroutine to finish")
+	}
+	if _, ok := h.subscribers[subscriber]; ok {
+		t.Error("Subscriber was not removed")
+	}
+}
+
+func TestSubscribeAndUnsubscribe2(t *testing.T) {
+	h := NewHUB(10)
+	defer h.Close()
+
+	subscriber := NewSubscriber()
+	h.Subscribe(subscriber)
+
+	h.Publish("Hello, World!")
+
+	select {
+	case msg := <-subscriber.MsgChan:
+		if msg != "Hello, World!" {
+			t.Errorf("Received incorrect message: %v", msg)
+		}
+	case <-time.After(time.Second * 1):
+		t.Error("Timed out waiting for message")
+	}
+
+	h.Unsubscribe(subscriber)
+	h.Publish("Hola Mundo!")
+
+	select {
+	case <-subscriber.MsgChan:
+		t.Error("Received unexpected message")
+	case <-time.After(time.Second * 1):
+		// Expected behavior
+	}
+}
+
+func TestHUBClose(t *testing.T) {
+	h := NewHUB(10)
+	subscriber := NewSubscriber()
+	h.Subscribe(subscriber)
+
+	h.Close()
+
+	select {
+	case <-h.done:
+		// Expected behavior
+	case <-time.After(time.Second * 1):
+		t.Error("Timed out waiting for broadcast goroutine to finish")
+	}
+}
 
 func TestHUB_broadcast(t *testing.T) {
 	// Create a new HUB instance
@@ -73,6 +152,23 @@ func TestHUB_broadcast(t *testing.T) {
 	}
 }
 
+func TestPublish(t *testing.T) {
+	h := NewHUB(10)
+	msg := "test message"
+	subscriber := NewSubscriber()
+	h.Subscribe(subscriber)
+
+	go h.Publish(msg)
+	select {
+	case m := <-subscriber.MsgChan:
+		if m != msg {
+			t.Errorf("Expected message %v, got %v", msg, m)
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("Message was not received within 1 second")
+	}
+}
+
 func TestSubscriber_Receive(t *testing.T) {
 	// Create a new Subscriber instance
 	sub := &Subscriber{
@@ -96,4 +192,32 @@ func TestSubscriber_Receive(t *testing.T) {
 	if ok {
 		t.Errorf("Received unexpected message from closed channel: %v", msg)
 	}
+}
+
+func BenchmarkDirectSend(b *testing.B) {
+	h := NewHUB(10)
+	defer h.Close()
+	subscriber := NewSubscriber()
+	h.Subscribe(subscriber)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h.Publish(i)
+		subscriber.Receive()
+	}
+}
+
+func BenchmarkParallenDirectSend(b *testing.B) {
+	h := NewHUB(10)
+	defer h.Close()
+
+	subscriber := NewSubscriber()
+	h.Subscribe(subscriber)
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			h.Publish(1)
+			subscriber.Receive()
+		}
+	})
 }

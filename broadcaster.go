@@ -28,6 +28,7 @@ type HUB struct {
 	unreg chan *Subscriber
 
 	subscribers map[*Subscriber]struct{}
+	done        chan struct{}
 }
 
 func NewHUB(bufflen int) *HUB {
@@ -36,6 +37,7 @@ func NewHUB(bufflen int) *HUB {
 		reg:         make(chan *Subscriber),
 		unreg:       make(chan *Subscriber),
 		subscribers: make(map[*Subscriber]struct{}),
+		done:        make(chan struct{}),
 	}
 
 	go h.run()
@@ -60,6 +62,7 @@ func (h *HUB) Close() {
 	close(h.reg)
 	close(h.unreg)
 	close(h.input)
+	close(h.done)
 }
 
 func (h *HUB) broadcast(msg interface{}) {
@@ -84,6 +87,8 @@ func (h *HUB) run() {
 			delete(h.subscribers, ch)
 		case msg := <-h.input:
 			h.broadcast(msg)
+		case <-h.done:
+			return
 		}
 	}
 }
